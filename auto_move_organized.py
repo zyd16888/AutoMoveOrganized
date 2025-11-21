@@ -104,12 +104,23 @@ def build_target_path(
     """
     根据模板生成目标路径（绝对路径）。
 
-    支持的占位符：
+    常用占位符示例（不完全列表，实际以 vars_map 为准）：
       {id}                -> scene id
       {scene_title}       -> 场景标题
-      {scene_date}        -> 场景日期（原始字符串）
+      {scene_date}        -> 场景日期（原始字符串，例如 2025-01-02）
+      {date_year}         -> 场景年份（从 scene_date 拆出）
+      {date_month}        -> 场景月份（两位）
+      {date_day}          -> 场景日期（两位）
       {studio}            -> Studio 名
-      {performers}        -> Performer 名（逗号分隔）
+      {studio_name}       -> Studio 名（同 {studio}）
+      {studio_id}         -> Studio ID
+      {code}              -> 场景 code
+      {director}          -> 导演
+      {performers}        -> Performer 名（-分隔）
+      {first_performer}   -> 第一个 Performer 名
+      {performer_count}   -> Performer 数量
+      {tag_names}         -> 标签名（逗号分隔）
+      {group_name}        -> 第一个分组名（若有）
       {original_basename} -> 原始文件名（含扩展名）
       {original_name}     -> 原始文件名（不含扩展名）
       {ext}               -> 扩展名（不含点）
@@ -129,25 +140,74 @@ def build_target_path(
     scene_id = scene.get("id")
     scene_title = scene.get("title") or ""
     scene_date = scene.get("date") or ""
+    code = scene.get("code") or ""
+    director = scene.get("director") or ""
+
+    # 拆分日期，方便按年/月/日建目录
+    date_year = ""
+    date_month = ""
+    date_day = ""
+    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})", scene_date)
+    if m:
+        date_year, date_month, date_day = m.groups()
 
     studio_name = ""
+    studio_id = ""
     studio = scene.get("studio")
     if isinstance(studio, dict):
         studio_name = studio.get("name") or ""
+        studio_id = str(studio.get("id") or "")
 
     performer_names: List[str] = []
     for p in scene.get("performers", []):
         if isinstance(p, dict) and p.get("name"):
             performer_names.append(p["name"])
 
-    performers_str = ", ".join(performer_names)
+    performers_str = "- ".join(performer_names)
+    first_performer = performer_names[0] if performer_names else ""
+    performer_count = len(performer_names)
+
+    # tags
+    tag_names: List[str] = []
+    for t in scene.get("tags", []):
+        if isinstance(t, dict) and t.get("name"):
+            tag_names.append(t["name"])
+    tags_str = ", ".join(tag_names)
+
+    # 第一个分组名
+    group_name = ""
+    groups = scene.get("groups") or []
+    if groups and isinstance(groups, list):
+        g0 = groups[0]
+        if isinstance(g0, dict):
+            g = g0.get("group")
+            if isinstance(g, dict):
+                group_name = g.get("name") or ""
+
+    # 评分
+    rating100 = scene.get("rating100")
+    rating = "" if rating100 is None else str(rating100)
 
     vars_map = {
         "id": scene_id,
         "scene_title": scene_title,
         "scene_date": scene_date,
+        "date_year": date_year,
+        "date_month": date_month,
+        "date_day": date_day,
         "studio": studio_name,
+        "studio_name": studio_name,
+        "studio_id": studio_id,
+        "code": code,
+        "director": director,
         "performers": performers_str,
+        "first_performer": first_performer,
+        "performer_count": performer_count,
+        "tag_names": tags_str,
+        "tags": tags_str,
+        "group_name": group_name,
+        "rating100": rating100,
+        "rating": rating,
         "original_basename": original_basename,
         "original_name": original_name,
         "ext": ext,
@@ -213,29 +273,35 @@ def move_file(scene: Dict[str, Any], file_obj: Dict[str, Any], settings: Dict[st
         return False
 
 
-def process_scene(stash: StashInterface, scene_id: int, settings: Dict[str, Any]) -> int:
+def process_scene(scene: Dict[str, Any], settings: Dict[str, Any]) -> int:
     """
-    根据 scene_id 处理该场景下的文件。
+    根据给定的 scene 对象处理其下的文件。
     返回移动的文件数量。
     """
-    try:
-        scene = stash.find_scene(scene_id)
-    except Exception as e:
-        log.error(f"find_scene({scene_id}) 失败: {e}")
-        return 0
-
     if not scene:
-        log.warning(f"Scene {scene_id} not found")
+        log.warning("Got empty scene object, skip")
         return 0
 
-    files = scene.get("files", []) or []
+    scene_id = scene.get("id")
+    files = scene.get("files") or []
+
+    if not files:
+        log.info(f"Scene {scene_id} has no files, skip")
+        return 0
+
     moved_count = 0
 
+    def _is_file_organized(file_obj: Dict[str, Any]) -> bool:
+        if not settings.get("move_only_organized"):
+            return True
+        # 如果文件上没有，则退回到 scene 级别
+        if "organized" in scene:
+            return bool(scene.get("organized"))
+        return False
+
     for f in files:
-        if settings["move_only_organized"]:
-            # file 对象上通常有 organized 字段
-            if not f.get("organized"):
-                continue
+        if not _is_file_organized(f):
+            continue
 
         if move_file(scene, f, settings):
             moved_count += 1
@@ -418,7 +484,7 @@ def handle_hook_or_task(stash: StashInterface, args: Dict[str, Any], settings: D
             log.info(f"Scene {scene_id} is not organized=True, skip")
             return f"Scene {scene_id} not organized, skipped"
 
-        moved = process_scene(stash, scene, settings)
+        moved = process_scene(scene, settings)
         return f"Processed scene {scene_id}, moved {moved} file(s), dry_run={dry_run}"
 
     # 2) Task 场景：遍历所有 scene
@@ -435,18 +501,15 @@ def handle_hook_or_task(stash: StashInterface, args: Dict[str, Any], settings: D
         sid = int(scene["id"])
         # 保存json, 调试用
         with open(f'scene-{sid}.json', 'w', encoding='utf-8') as f:
-            json.dump(scene, f, indent=2,ensure_ascii=False)
+            json.dump(scene, f, indent=2, ensure_ascii=False)
 
         if not scene.get("organized"):
             continue
 
-        # organized_scenes += 1
-        # sid = int(scene["id"])
-        #
-        #
-        # log.info(f"Processing organized scene id={sid} title={scene.get('title')!r}")
-        # moved = process_scene(stash, sid, settings)
-        # total_moved += moved
+        organized_scenes += 1
+        log.info(f"Processing organized scene id={sid} title={scene.get('title')!r}")
+        moved = process_scene(scene, settings)
+        total_moved += moved
 
     msg = (
         f"Scanned {total_scenes} scenes, "
@@ -484,7 +547,8 @@ def main():
     stash = connect_stash(server_conn)
     settings = load_settings(stash)
 
-
+    # with open('settings.json', 'w', encoding='utf-8') as f:
+    #     json.dump(settings, f, indent=2, ensure_ascii=False)
 
     try:
         msg = handle_hook_or_task(stash, args, settings)
