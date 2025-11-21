@@ -360,6 +360,7 @@ def process_scene(scene: Dict[str, Any], settings: Dict[str, Any]) -> int:
             continue
 
         if move_file(scene, f, settings):
+
             moved_count += 1
 
     log.info(f"Scene {scene_id}: moved {moved_count} files")
@@ -573,6 +574,28 @@ def write_nfo_for_scene(video_path: str, scene: Dict[str, Any], settings: Dict[s
     urls = scene.get("urls") or []
     url0 = urls[0] if urls else ""
 
+    # 片长（分钟）
+    runtime_minutes = ""
+    for f in scene.get("files") or []:
+        if not isinstance(f, dict):
+            continue
+        dur = f.get("duration")
+        if dur:
+            try:
+                runtime_minutes = str(int(round(float(dur) / 60)))
+            except Exception:
+                runtime_minutes = ""
+            break
+
+    # 标签 / 类型
+    tag_names: List[str] = []
+    for t in scene.get("tags") or []:
+        if isinstance(t, dict) and t.get("name"):
+            tag_names.append(t["name"])
+
+    # 系列 / 合集：取第一个 group 名称
+    collection_name = vars_map.get("group_name") or ""
+
     root = ET.Element("movie")
 
     def _set_text(tag: str, value: str) -> None:
@@ -585,10 +608,25 @@ def write_nfo_for_scene(video_path: str, scene: Dict[str, Any], settings: Dict[s
         el.text = value
 
     _set_text("title", title)
+    # 原始标题：可以加上番号以便在 Emby 中区分
+    if code:
+        _set_text("originaltitle", f"{title}")
+    else:
+        _set_text("originaltitle", title)
     _set_text("sorttitle", title)
     _set_text("year", year)
+    # Emby/Kodi 都识别 premiered / releasedate
     _set_text("premiered", date)
+    _set_text("releasedate", date)
+    # runtime 使用分钟
+    _set_text("runtime", runtime_minutes)
     _set_text("plot", plot)
+    # outline 作为简要介绍（截断 plot）
+    if plot:
+        short = plot.strip()
+        if len(short) > 200:
+            short = short[:197] + "..."
+        _set_text("outline", short)
     _set_text("studio", studio)
     _set_text("director", director)
     _set_text("id", external_id or str(vars_map.get("id") or ""))
@@ -596,6 +634,24 @@ def write_nfo_for_scene(video_path: str, scene: Dict[str, Any], settings: Dict[s
     if rating:
         _set_text("rating", rating)
     _set_text("url", url0)
+
+    # genre / tag：用 tags.name 填充
+    for name in tag_names:
+        _set_text("genre", name)
+        _set_text("tag", name)
+
+    # collection / set：使用 group 名称
+    if collection_name:
+        _set_text("set", collection_name)
+        _set_text("collection", collection_name)
+
+    # uniqueid：stashdb 及本地 scene id
+    if external_id:
+        uid_el = ET.SubElement(root, "uniqueid", {"type": "stashdb", "default": "true"})
+        uid_el.text = external_id
+    if vars_map.get("id"):
+        uid_local = ET.SubElement(root, "uniqueid", {"type": "stash", "default": "false"})
+        uid_local.text = str(vars_map.get("id"))
 
     # 演员列表
     performers = scene.get("performers") or []
@@ -774,6 +830,7 @@ def handle_hook_or_task(stash: StashInterface, args: Dict[str, Any], settings: D
         log.info(f"Processing organized scene id={sid} title={scene.get('title')!r}")
         moved = process_scene(scene, settings)
         total_moved += moved
+        break #单个完成后打断, 方便调试
 
     msg = (
         f"Scanned {total_scenes} scenes, "
