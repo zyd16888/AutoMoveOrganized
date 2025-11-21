@@ -165,7 +165,7 @@ def build_template_vars(scene: Dict[str, Any], file_path: str) -> Dict[str, Any]
         if isinstance(p, dict) and p.get("name"):
             performer_names.append(p["name"])
 
-    performers_str = ", ".join(performer_names)
+    performers_str = "-".join(performer_names)
     first_performer = performer_names[0] if performer_names else ""
     performer_count = len(performer_names)
 
