@@ -5,7 +5,7 @@ description: >
   在场景更新后，把已整理(organized)的文件移动到指定目录，并按模板重命名。
   也可以从 Tasks 页面手动触发。
 
-version: "0.1.1"
+version: "0.1.2"
 url: https://example.com/auto-move-organized
 
 # UI 设置：在设置 -> 插件 -> 本插件 里会显示
@@ -44,7 +44,7 @@ interface: raw
 errLog: info
 
 tasks:
-  - name: run
+  - name: Run Auto Move Organized
     description: 手动执行：根据设置移动选中场景（或在 args.sceneIds 指定的场景）
     defaultArgs: {}
 
