@@ -81,6 +81,7 @@ def load_settings(stash: StashInterface) -> Dict[str, Any]:
     write_nfo = bool(_get_val("write_nfo", True))
     download_poster = bool(_get_val("download_poster", True))
     download_actor_images = bool(_get_val("download_actor_images", True))
+    export_actor_nfo = bool(_get_val("export_actor_nfo", True))
 
     # AI / 翻译 相关配置
     translate_enable = bool(_get_val("translate_enable", False))
@@ -105,7 +106,8 @@ def load_settings(stash: StashInterface) -> Dict[str, Any]:
         f"Loaded settings: target_root='{target_root}', "
         f"template='{filename_template}', move_only_organized={move_only_org}, "
         f"dry_run={dry_run}, write_nfo={write_nfo}, "
-        f"download_poster={download_poster}, download_actor_images={download_actor_images}"
+        f"download_poster={download_poster}, download_actor_images={download_actor_images}, "
+        f"export_actor_nfo={export_actor_nfo}"
     )
 
     # 也把 AI 配置 log 出来（注意：不要在生产环境 log 明文 API key）
@@ -123,6 +125,7 @@ def load_settings(stash: StashInterface) -> Dict[str, Any]:
         "write_nfo": write_nfo,
         "download_poster": download_poster,
         "download_actor_images": download_actor_images,
+        "export_actor_nfo": export_actor_nfo,
         # AI / 翻译
         "translate_enable": translate_enable,
         "translate_api_base": translate_api_base,
@@ -829,11 +832,76 @@ def download_scene_art(video_path: str, scene: Dict[str, Any], settings: Dict[st
     _download_binary(abs_url, dst_poster, settings)
 
 
+def write_actor_nfo(actor_dir: str, performer: Dict[str, Any], settings: Dict[str, Any]) -> None:
+    """
+    为单个演员生成/覆盖 actor.nfo 文件，写入基本信息。
+    结构示例：
+      <person>
+        <name>Actor Name</name>
+        <gender>female</gender>
+        <country>US</country>
+        <birthdate>1990-01-01</birthdate>
+        <height_cm>170</height_cm>
+        <measurements>90-60-90</measurements>
+        <fake_tits>true</fake_tits>
+        <disambiguation>...</disambiguation>
+      </person>
+    """
+    if not settings.get("export_actor_nfo", True):
+        return
+
+    name = performer.get("name")
+    if not name:
+        return
+
+    root = ET.Element("person")
+
+    def _set(tag: str, value: Any) -> None:
+        if value is None:
+            return
+        text = str(value).strip()
+        if not text:
+            return
+        el = ET.SubElement(root, tag)
+        el.text = text
+
+    _set("name", name)
+    _set("gender", performer.get("gender"))
+    _set("country", performer.get("country"))
+    _set("birthdate", performer.get("birthdate"))
+    _set("height_cm", performer.get("height_cm"))
+    _set("measurements", performer.get("measurements"))
+    _set("fake_tits", performer.get("fake_tits"))
+    _set("disambiguation", performer.get("disambiguation"))
+
+    nfo_path = os.path.join(actor_dir, "actor.nfo")
+
+    if settings.get("dry_run"):
+        try:
+            xml_str = ET.tostring(root, encoding="unicode")
+        except Exception:
+            xml_str = "<person>...</person>"
+        log.info(f"[dry_run] Would write actor NFO for '{name}' -> {nfo_path}")
+        log.info(xml_str)
+        return
+
+    try:
+        os.makedirs(actor_dir, exist_ok=True)
+        tree = ET.ElementTree(root)
+        tree.write(nfo_path, encoding="utf-8", xml_declaration=True)
+        log.info(f"Wrote actor NFO for '{name}' -> {nfo_path}")
+    except Exception as e:
+        log.error(f"写入演员 NFO 失败 '{nfo_path}': {e}")
+
+
 def download_actor_images(scene: Dict[str, Any], settings: Dict[str, Any]) -> None:
     """
-    把演员图片下载到 {target_root}/actors/ 目录下，文件名为演员名（清洗过）。
+    把演员图片和信息导出到 {target_root}/actors/目录。
+    结构示例：
+      {target_root}/actors/演员名/actor.nfo
+      {target_root}/actors/演员名/folder.jpg
     """
-    if not settings.get("download_actor_images", True):
+    if not settings.get("download_actor_images", True) and not settings.get("export_actor_nfo", True):
         return
 
     performers = scene.get("performers") or []
@@ -846,30 +914,45 @@ def download_actor_images(scene: Dict[str, Any], settings: Dict[str, Any]) -> No
         return
 
     actors_root = os.path.join(target_root, "actors")
-    if not settings.get("dry_run"):
+    dry_run = bool(settings.get("dry_run"))
+    if not dry_run:
         os.makedirs(actors_root, exist_ok=True)
+
+    seen_names = set()
 
     for p in performers:
         if not isinstance(p, dict):
             continue
         name = p.get("name")
+        if not name:
+            continue
+
+        # 以清洗过的名字作为子目录，避免同一演员在同一场景被处理多次
+        safe_name = safe_segment(name)
+        if safe_name in seen_names:
+            continue
+        seen_names.add(safe_name)
+
+        actor_dir = os.path.join(actors_root, safe_name)
+        if not dry_run:
+            os.makedirs(actor_dir, exist_ok=True)
+
+        # 1) 下载演员图片 -> folder.jpg
         image_url = p.get("image_path")
-        if not name or not image_url:
-            continue
+        if settings.get("download_actor_images", True) and image_url:
+            dst_path = os.path.join(actor_dir, "folder.jpg")
+            abs_url = build_absolute_url(image_url, settings)
 
-        filename = f"{safe_segment(name)}.jpg"
-        dst_path = os.path.join(actors_root, filename)
-        abs_url = build_absolute_url(image_url, settings)
+            if dry_run:
+                log.info(f"[dry_run] Would download actor image: '{abs_url}' -> '{dst_path}'")
+            else:
+                if os.path.exists(dst_path):
+                    log.info(f"Actor image already exists, skip: {dst_path}")
+                else:
+                    _download_binary(abs_url, dst_path, settings)
 
-        if settings.get("dry_run"):
-            log.info(f"[dry_run] Would download actor image: '{abs_url}' -> '{dst_path}'")
-            continue
-
-        if os.path.exists(dst_path):
-            log.info(f"Actor image already exists, skip: {dst_path}")
-            continue
-
-        _download_binary(abs_url, dst_path, settings)
+        # 2) 生成演员 NFO
+        write_actor_nfo(actor_dir, p, settings)
 
 
 def post_process_moved_file(dst_video_path: str, scene: Dict[str, Any], settings: Dict[str, Any]) -> None:
@@ -877,7 +960,7 @@ def post_process_moved_file(dst_video_path: str, scene: Dict[str, Any], settings
     文件移动之后的后续处理：
     1. 写 NFO
     2. 下载场景封面图到视频目录（folder.jpg）
-    3. 下载演员头像到 {target_root}/actors/
+    3. 下载演员头像并生成演员 NFO 到 {target_root}/actors/
     """
     write_nfo_for_scene(dst_video_path, scene, settings)
     download_scene_art(dst_video_path, scene, settings)
@@ -897,7 +980,11 @@ def handle_hook_or_task(stash: StashInterface, args: Dict[str, Any], settings: D
     # 1) Hook 场景：如果有 hookContext.id，就只处理这个 scene
     hook_ctx = (args or {}).get("hookContext") or {}
     scene_id = hook_ctx.get("id") or hook_ctx.get("scene_id")
+    with open(f"hook_ctx-{scene_id}.json", "w", encoding="utf-8") as f:
+        json.dump(hook_ctx, f, indent=2, ensure_ascii=False)
+
     if scene_id is not None:
+        return f"Processed scene {scene_id}, Hook 场景直接返回"
         scene_id = int(scene_id)
         log.info(f"[{PLUGIN_ID}] Hook mode, processing single scene id={scene_id}")
 
@@ -935,8 +1022,8 @@ def handle_hook_or_task(stash: StashInterface, args: Dict[str, Any], settings: D
         total_scenes += 1
         sid = int(scene["id"])
         # 保存json, 调试用
-        # with open(f'scene-{sid}.json', 'w', encoding='utf-8') as f:
-        #     json.dump(scene, f, indent=2, ensure_ascii=False)
+        with open(f'scene-{sid}.json', 'w', encoding='utf-8') as f:
+            json.dump(scene, f, indent=2, ensure_ascii=False)
 
         if not scene.get("organized"):
             continue
@@ -962,8 +1049,8 @@ def read_input_file():
 
 
 def main():
-    json_input = read_input()  # 插件运行时从 stdin 读
-    # json_input = read_input_file()  # 调试时从文件读
+    # json_input = read_input()  # 插件运行时从 stdin 读
+    json_input = read_input_file()  # 调试时从文件读
     print(json_input)
     log.info(f"Plugin input: {json_input}")
     server_conn = json_input.get("server_connection") or {}
