@@ -987,11 +987,11 @@ def handle_hook_or_task(stash: StashInterface, args: Dict[str, Any], settings: D
     # 1) Hook 场景：如果有 hookContext.id，就只处理这个 scene
     hook_ctx = (args or {}).get("hookContext") or {}
     scene_id = hook_ctx.get("id") or hook_ctx.get("scene_id")
-    with open(f"hook_ctx-{scene_id}.json", "w", encoding="utf-8") as f:
-        json.dump(hook_ctx, f, indent=2, ensure_ascii=False)
 
     if scene_id is not None:
-        return f"Processed scene {scene_id}, Hook 场景直接返回"
+        with open(f"hook_ctx-{scene_id}.json", "w", encoding="utf-8") as f:
+            json.dump(hook_ctx, f, indent=2, ensure_ascii=False)
+        return f"Processed scene {scene_id}, Hook 场景保存日志直接返回"
         scene_id = int(scene_id)
         log.info(f"[{PLUGIN_ID}] Hook mode, processing single scene id={scene_id}")
 
@@ -1029,8 +1029,8 @@ def handle_hook_or_task(stash: StashInterface, args: Dict[str, Any], settings: D
         total_scenes += 1
         sid = int(scene["id"])
         # 保存json, 调试用
-        with open(f'scene-{sid}.json', 'w', encoding='utf-8') as f:
-            json.dump(scene, f, indent=2, ensure_ascii=False)
+        # with open(f'scene-{sid}.json', 'w', encoding='utf-8') as f:
+        #     json.dump(scene, f, indent=2, ensure_ascii=False)
 
         if not scene.get("organized"):
             continue
