@@ -12,6 +12,7 @@ from typing import Dict, Any, List
 import requests
 import stashapi.log as log
 from stashapi.stashapp import StashInterface
+from ai_translate import translate_title_and_plot
 
 # 必须和 YAML 里的 id 对应
 PLUGIN_ID = "auto-move-organized"
@@ -47,7 +48,7 @@ def connect_stash(server_connection: Dict[str, Any]) -> StashInterface:
 
 def load_settings(stash: StashInterface) -> Dict[str, Any]:
     """
-    从 Stash 配置里读取本插件的 settings。
+    从 Stash 配置里读取本插件的 settings，并把常用的 AI 翻译配置也一并返回。
     """
     try:
         cfg = stash.get_configuration()
@@ -62,12 +63,17 @@ def load_settings(stash: StashInterface) -> Dict[str, Any]:
 
     plugins_settings = cfg.get("plugins", {}).get("auto_move_organized", {})
 
+    # 保存一份到本地，便于调试
+    with open("auto_move_organized_plugins_settings.json", "w", encoding="utf-8") as f:
+        json.dump(plugins_settings, f, ensure_ascii=False, indent=4)
+
     def _get_val(key: str, default):
         v = plugins_settings.get(key, default)
         if isinstance(v, dict) and "value" in v:
             return v.get("value", default)
         return v
 
+    # 基本选项
     target_root = _get_val("target_root", "")
     filename_template = _get_val("filename_template", "{original_basename}")
     move_only_org = bool(_get_val("move_only_organized", True))
@@ -76,11 +82,37 @@ def load_settings(stash: StashInterface) -> Dict[str, Any]:
     download_poster = bool(_get_val("download_poster", True))
     download_actor_images = bool(_get_val("download_actor_images", True))
 
+    # AI / 翻译 相关配置
+    translate_enable = bool(_get_val("translate_enable", False))
+    translate_api_base = _get_val("translate_api_base", "") or ""
+    translate_api_key = _get_val("translate_api_key", "") or ""
+    translate_model = _get_val("translate_model", "") or ""
+    # 有些配置界面可能把布尔值和字符串混用，兼容处理
+    translate_plot = bool(_get_val("translate_plot", False))
+    translate_title = bool(_get_val("translate_title", False))
+    # temperature 可能是字符串或数字，尝试转为 float，如果失败则保留原样
+    translate_temperature = _get_val("translate_temperature", "")
+    translate_prompt = _get_val("translate_prompt", "")
+    # translate_temperature = None
+    # try:
+    #     if temp_raw is not None and str(temp_raw).strip() != "":
+    #         translate_temperature = float(temp_raw)
+    # except Exception:
+    #     translate_temperature = str(temp_raw)
+
+
     log.info(
         f"Loaded settings: target_root='{target_root}', "
         f"template='{filename_template}', move_only_organized={move_only_org}, "
         f"dry_run={dry_run}, write_nfo={write_nfo}, "
         f"download_poster={download_poster}, download_actor_images={download_actor_images}"
+    )
+
+    # 也把 AI 配置 log 出来（注意：不要在生产环境 log 明文 API key）
+    log.info(
+        f"Translate config: enabled={translate_enable}, api_base='{translate_api_base}', "
+        f"model='{translate_model}', translate_title={translate_title}, translate_plot={translate_plot}, "
+        f"temperature={translate_temperature}"
     )
 
     return {
@@ -91,6 +123,15 @@ def load_settings(stash: StashInterface) -> Dict[str, Any]:
         "write_nfo": write_nfo,
         "download_poster": download_poster,
         "download_actor_images": download_actor_images,
+        # AI / 翻译
+        "translate_enable": translate_enable,
+        "translate_api_base": translate_api_base,
+        "translate_api_key": translate_api_key,
+        "translate_model": translate_model,
+        "translate_plot": translate_plot,
+        "translate_title": translate_title,
+        "translate_temperature": translate_temperature,
+        "translate_prompt": translate_prompt,
     }
 
 
@@ -300,17 +341,17 @@ def move_file(scene: Dict[str, Any], file_obj: Dict[str, Any], settings: Dict[st
         log.error(f"构建目标路径失败: {e}")
         return False
 
-    if src == dst:
-        log.info(f"源路径和目标路径相同，跳过: {src}")
-        return False
-
-    if not os.path.exists(src):
-        log.warning(f"源文件不存在，跳过: {src}")
-        return False
-
-    if os.path.exists(dst):
-        log.warning(f"目标文件已存在，跳过: {dst}")
-        return False
+    # if src == dst:
+    #     log.info(f"源路径和目标路径相同，跳过: {src}")
+    #     return False
+    #
+    # if not os.path.exists(src):
+    #     log.warning(f"源文件不存在，跳过: {src}")
+    #     return False
+    #
+    # if os.path.exists(dst):
+    #     log.warning(f"目标文件已存在，跳过: {dst}")
+    #     return False
 
     dst_dir = os.path.dirname(dst)
     try:
@@ -598,6 +639,30 @@ def write_nfo_for_scene(video_path: str, scene: Dict[str, Any], settings: Dict[s
     # 系列 / 合集：取第一个 group 名称
     collection_name = vars_map.get("group_name") or ""
 
+    # AI 翻译（可选）
+    translated_title = None
+    translated_plot = None
+    try:
+        translated_title, translated_plot = translate_title_and_plot(
+            title=title,
+            plot=plot,
+            settings=settings,
+        )
+    except Exception as e:
+        log.error(f"[translator] 调用翻译失败: {e}")
+
+    # 根据配置决定最终写入 NFO 的标题/简介
+    final_title = title
+    final_plot = plot
+    original_title_for_nfo = title
+    original_plot_for_nfo = plot
+
+    if translated_title:
+        final_title = translated_title
+
+    if translated_plot:
+        final_plot = translated_plot
+
     root = ET.Element("movie")
 
     def _set_text(tag: str, value: str) -> None:
@@ -609,26 +674,22 @@ def write_nfo_for_scene(video_path: str, scene: Dict[str, Any], settings: Dict[s
         el = ET.SubElement(root, tag)
         el.text = value
 
-    _set_text("title", title)
-    # 原始标题：可以加上番号以便在 Emby 中区分
+    _set_text("title", final_title)
+    # 原始标题：可以加上番号以便在 Emby 中区分（保留未翻译的标题）
+    original_for_field = original_title_for_nfo
     if code:
-        _set_text("originaltitle", f"{title}")
-    else:
-        _set_text("originaltitle", title)
-    _set_text("sorttitle", title)
+        original_for_field = f"{code} {original_for_field}"
+    _set_text("originaltitle", original_for_field)
+    _set_text("sorttitle", final_title)
     _set_text("year", year)
     # Emby/Kodi 都识别 premiered / releasedate
     _set_text("premiered", date)
     _set_text("releasedate", date)
     # runtime 使用分钟
     _set_text("runtime", runtime_minutes)
-    _set_text("plot", plot)
-    # outline 作为简要介绍（截断 plot）
-    if plot:
-        short = plot.strip()
-        if len(short) > 200:
-            short = short[:197] + "..."
-        _set_text("outline", short)
+    _set_text("plot", final_plot)
+    # 保存原始简介文本，方便需要时查看原文
+    _set_text("originalplot", original_plot_for_nfo)
     _set_text("studio", studio)
     _set_text("director", director)
     _set_text("id", external_id or str(vars_map.get("id") or ""))
@@ -901,8 +962,8 @@ def read_input_file():
 
 
 def main():
-    json_input = read_input()  # 插件运行时从 stdin 读
-    # json_input = read_input_file()  # 调试时从文件读
+    # json_input = read_input()  # 插件运行时从 stdin 读
+    json_input = read_input_file()  # 调试时从文件读
     print(json_input)
     log.info(f"Plugin input: {json_input}")
     server_conn = json_input.get("server_connection") or {}
@@ -921,6 +982,9 @@ def main():
     settings = load_settings(stash)
     # 把 server_connection 也塞到 settings 里，方便下载图片等功能使用 cookie
     settings["server_connection"] = server_conn
+
+    with open('settings.json', 'w', encoding='utf-8') as f:
+        json.dump(settings, f, indent=2, ensure_ascii=False)
 
     try:
         msg = handle_hook_or_task(stash, args, settings)

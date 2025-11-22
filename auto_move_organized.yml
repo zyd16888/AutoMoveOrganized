@@ -5,7 +5,7 @@ description: >
   在场景更新后，把已整理(organized)的文件移动到指定目录，并按模板重命名。
   也可以从 Tasks 页面手动触发。
 
-version: "0.1.2"
+version: "0.1.5"
 url: https://example.com/auto-move-organized
 
 # UI 设置：在设置 -> 插件 -> 本插件 里会显示
@@ -31,6 +31,30 @@ settings:
   download_actor_images:
     displayName: 下载演员图片到 actors 目录
     type: BOOLEAN
+  translate_enable:
+    displayName: 启用 AI 翻译
+    type: BOOLEAN
+  translate_title:
+    displayName: 翻译标题
+    type: BOOLEAN
+  translate_plot:
+    displayName: 翻译简介
+    type: BOOLEAN
+  translate_api_base:
+    displayName: 翻译 API Base URL
+    type: STRING
+  translate_api_key:
+    displayName: 翻译 API Key
+    type: STRING
+  translate_model:
+    displayName: 翻译模型名称
+    type: STRING
+  translate_temperature:
+    displayName: 翻译温度 (0-2，字符串)
+    type: STRING
+  translate_prompt:
+    displayName: 翻译提示词 (system prompt)
+    type: STRING
 
 # 外部脚本调用方式
 exec:
@@ -50,7 +74,7 @@ tasks:
 
 hooks:
   - name: run
-    description: 在场景更新后自动移动该场景下的已整理文件
+    description: 在场景更新后自动移动该场景下的已整理文件(暂未实现功能)
     triggeredBy:
       - Scene.Update.Post
     defaultArgs: {}
