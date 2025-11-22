@@ -1049,8 +1049,8 @@ def read_input_file():
 
 
 def main():
-    # json_input = read_input()  # 插件运行时从 stdin 读
-    json_input = read_input_file()  # 调试时从文件读
+    json_input = read_input()  # 插件运行时从 stdin 读
+    # json_input = read_input_file()  # 调试时从文件读
     print(json_input)
     log.info(f"Plugin input: {json_input}")
     server_conn = json_input.get("server_connection") or {}
