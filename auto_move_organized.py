@@ -654,17 +654,24 @@ def write_nfo_for_scene(video_path: str, scene: Dict[str, Any], settings: Dict[s
     except Exception as e:
         log.error(f"[translator] 调用翻译失败: {e}")
 
-    # 根据配置决定最终写入 NFO 的标题/简介
-    final_title = title
+    # 根据配置决定最终写入 NFO 的简介；标题使用自定义格式
     final_plot = plot
     original_title_for_nfo = title
     original_plot_for_nfo = plot
 
-    if translated_title:
-        final_title = translated_title
-
     if translated_plot:
         final_plot = translated_plot
+
+    # 构造 NFO <title>:
+    # 未翻译: {studio}.{scene_date}.{scene_title}
+    # 翻译成功: {studio}.{scene_date}.{scene_title}.{chinese_title}
+    base_parts = [studio, date, title]
+    base_parts = [p for p in base_parts if p]
+    base_title = ".".join(base_parts) if base_parts else title
+    if translated_title:
+        title_for_nfo = f"{base_title}.{translated_title}"
+    else:
+        title_for_nfo = base_title
 
     root = ET.Element("movie")
 
@@ -677,13 +684,13 @@ def write_nfo_for_scene(video_path: str, scene: Dict[str, Any], settings: Dict[s
         el = ET.SubElement(root, tag)
         el.text = value
 
-    _set_text("title", final_title)
+    _set_text("title", title_for_nfo)
     # 原始标题：可以加上番号以便在 Emby 中区分（保留未翻译的标题）
     original_for_field = original_title_for_nfo
     if code:
         original_for_field = f"{code} {original_for_field}"
     _set_text("originaltitle", original_for_field)
-    _set_text("sorttitle", final_title)
+    _set_text("sorttitle", title_for_nfo)
     _set_text("year", year)
     # Emby/Kodi 都识别 premiered / releasedate
     _set_text("premiered", date)
