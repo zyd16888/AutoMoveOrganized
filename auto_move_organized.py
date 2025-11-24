@@ -639,11 +639,8 @@ def _download_binary(url: str, dst_path: str, settings: Dict[str, Any], detect_e
             resp = session.get(url, timeout=30, stream=True)
             resp.raise_for_status()
 
-            # 默认直接使用调用方给的目标路径
+            # 默认直接使用调用方给的目标路径（完整文件名主体已经在上层构造好，例如包含演员名和 -poster）
             final_path = dst_path
-            dst_dir, dst_filename = os.path.split(dst_path)
-            log.info(f"Downloading '{url}' to '{final_path}'")
-            log.info(f"Downloading {dst_dir} and filename {dst_filename}")
 
             if detect_ext:
                 content_type = (resp.headers.get("Content-Type") or "").lower()
@@ -667,33 +664,13 @@ def _download_binary(url: str, dst_path: str, settings: Dict[str, Any], detect_e
                     except Exception:
                         guessed_ext = ""
 
-                # 只调整扩展名，不动文件名主体（包含演员名等）
-                name_no_ext, old_ext = os.path.splitext(dst_filename)
-                log.info(
-                    f"Downloading name_no_ext {name_no_ext}, Old extension: '{old_ext}'"
-                )
+                # 这里只负责“补上扩展名”，不再尝试从 dst_path 中拆分文件名/扩展名，避免截断演员名等信息
+                # 如果上层已经带了明确的图片扩展名，就保持原样；否则直接在末尾追加推断出的扩展名
+                lower_path = dst_path.lower()
+                has_known_ext = lower_path.endswith(".jpg") or lower_path.endswith(".jpeg") or lower_path.endswith(".png") or lower_path.endswith(".webp") or lower_path.endswith(".gif")
 
-                if guessed_ext:
-                    # 若有明确推断出的扩展名，则使用它
-                    if old_ext.lower() == guessed_ext.lower():
-                        final_filename = dst_filename
-                    else:
-
-                        final_filename = name_no_ext + guessed_ext
-                        log.info(
-                            f"final_filename = name_no_ext + guessed_ext : {final_filename}, {name_no_ext}, {guessed_ext}"
-                        )
-                elif old_ext:
-                    # 没有推断出，但原路径自带扩展名，保持原样
-                    final_filename = dst_filename
-                else:
-                    # 两者都没有，就用原文件名（无扩展名）
-                    final_filename = dst_filename
-
-                final_path = os.path.join(dst_dir, final_filename)
-                log.info(
-                    f"Downloading file extension '{guessed_ext}', final path: '{final_path}'"
-                )
+                if guessed_ext and not has_known_ext:
+                    final_path = dst_path + guessed_ext
 
             os.makedirs(os.path.dirname(final_path), exist_ok=True)
             with open(final_path, "wb") as f:
