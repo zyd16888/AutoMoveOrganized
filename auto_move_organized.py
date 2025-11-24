@@ -639,10 +639,9 @@ def _download_binary(url: str, dst_path: str, settings: Dict[str, Any], detect_e
             resp = session.get(url, timeout=30, stream=True)
             resp.raise_for_status()
 
-            # 根据响应头 / URL 推断实际图片类型，动态决定扩展名
+            # 默认直接使用调用方给的目标路径
             final_path = dst_path
             dst_dir, dst_filename = os.path.split(dst_path)
-            name_no_ext, old_ext = os.path.splitext(dst_filename)
 
             if detect_ext:
                 content_type = (resp.headers.get("Content-Type") or "").lower()
@@ -666,12 +665,23 @@ def _download_binary(url: str, dst_path: str, settings: Dict[str, Any], detect_e
                     except Exception:
                         guessed_ext = ""
 
-                # 如果无法推断，就退回到原始扩展名（可能为空）
-                final_ext = guessed_ext or old_ext or ""
+                # 只调整扩展名，不动文件名主体（包含演员名等）
+                name_no_ext, old_ext = os.path.splitext(dst_filename)
 
-                # 只负责补全扩展名，不再修改基础文件名
-                if final_ext:
-                    final_path = os.path.join(dst_dir, name_no_ext + final_ext)
+                if guessed_ext:
+                    # 若有明确推断出的扩展名，则使用它
+                    if old_ext.lower() == guessed_ext.lower():
+                        final_filename = dst_filename
+                    else:
+                        final_filename = name_no_ext + guessed_ext
+                elif old_ext:
+                    # 没有推断出，但原路径自带扩展名，保持原样
+                    final_filename = dst_filename
+                else:
+                    # 两者都没有，就用原文件名（无扩展名）
+                    final_filename = dst_filename
+
+                final_path = os.path.join(dst_dir, final_filename)
 
             os.makedirs(os.path.dirname(final_path), exist_ok=True)
             with open(final_path, "wb") as f:
