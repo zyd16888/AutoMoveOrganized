@@ -908,7 +908,8 @@ def write_nfo_for_scene(video_path: str, scene: Dict[str, Any], settings: Dict[s
 
 def download_scene_art(video_path: str, scene: Dict[str, Any], settings: Dict[str, Any]) -> None:
     """
-    下载场景封面图到视频所在目录，命名成 Emby 常见格式（folder.jpg）。
+    下载场景封面图到视频所在目录，命名成
+    「{视频完整文件名（无扩展名）}-poster.[ext]」的格式，便于 Emby 识别。
     """
     if not settings.get("download_poster", True):
         return
@@ -923,19 +924,50 @@ def download_scene_art(video_path: str, scene: Dict[str, Any], settings: Dict[st
     base_name = os.path.splitext(os.path.basename(video_path))[0]
     # 先不带扩展名，真实扩展名在下载时根据 Content-Type/URL 决定
     poster_base = os.path.join(video_dir, f"{base_name}-poster")
+    poster_stem = os.path.basename(poster_base)
+    exts = (".jpg", ".jpeg", ".png", ".webp", ".gif")
+
+    # 如果已经存在与当前视频名匹配的 -poster 文件，直接跳过
+    for ext in exts:
+        candidate = poster_base + ext
+        if os.path.exists(candidate):
+            log.info(f"Poster already exists, skip: {candidate}")
+            return
+
+    # 如果没有匹配的 -poster 文件，但目录里存在“旧命名”的 -poster 文件，尝试重命名为新前缀
+    # existing_posters = []
+    # try:
+    #     for name in os.listdir(video_dir):
+    #         stem, ext = os.path.splitext(name)
+    #         if ext.lower() not in exts:
+    #             continue
+    #         if stem.endswith("-poster") and stem != poster_stem:
+    #             existing_posters.append(os.path.join(video_dir, name))
+    # except Exception as e:
+    #     log.error(f"扫描目录中的旧 poster 文件失败: {e}")
+
+    # if len(existing_posters) == 1:
+    #     old_path = existing_posters[0]
+    #     old_ext = os.path.splitext(old_path)[1]
+    #     new_path = poster_base + old_ext
+
+    #     if settings.get("dry_run"):
+    #         log.info(f"[dry_run] Would rename poster: '{old_path}' -> '{new_path}'")
+    #         return
+
+    #     try:
+    #         os.rename(old_path, new_path)
+    #         log.info(f"Renamed poster: '{old_path}' -> '{new_path}'")
+    #         return
+    #     except Exception as e:
+    #         log.error(f"重命名 poster 文件失败 '{old_path}' -> '{new_path}': {e}")
+            # 如果重命名失败，则继续尝试重新下载
 
     abs_url = build_absolute_url(poster_url, settings)
 
     if settings.get("dry_run"):
         log.info(f"[dry_run] Would download poster: '{abs_url}' -> '{poster_base}.[ext]'")
         return
-
-    # 如果已经有任意常见图片扩展名的封面，则跳过
-    for ext in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
-        candidate = poster_base + ext
-        if os.path.exists(candidate):
-            log.info(f"Poster already exists, skip: {candidate}")
-            return
 
     _download_binary(abs_url, poster_base, settings, detect_ext=True)
 
