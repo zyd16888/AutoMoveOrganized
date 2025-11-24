@@ -669,13 +669,9 @@ def _download_binary(url: str, dst_path: str, settings: Dict[str, Any], detect_e
                 # 如果无法推断，就退回到原始扩展名（可能为空）
                 final_ext = guessed_ext or old_ext or ""
 
-                # 保证影片封面文件名以 "-poster" 结尾（便于 Emby 识别）
-                final_name = name_no_ext
-                if not final_name.endswith("-poster"):
-                    final_name = final_name + "-poster"
-
-                final_filename = final_name + final_ext
-                final_path = os.path.join(dst_dir, final_filename)
+                # 只负责补全扩展名，不再修改基础文件名
+                if final_ext:
+                    final_path = os.path.join(dst_dir, name_no_ext + final_ext)
 
             os.makedirs(os.path.dirname(final_path), exist_ok=True)
             with open(final_path, "wb") as f:
