@@ -974,6 +974,7 @@ def download_scene_art(video_path: str, scene: Dict[str, Any], settings: Dict[st
         log.info(f"[dry_run] Would download poster: '{abs_url}' -> '{poster_base}.[ext]'")
         return
 
+    log.info(f"Would download poster: '{abs_url}' -> '{poster_base}.[ext]'")
     _download_binary(abs_url, poster_base, settings, detect_ext=True)
 
 
