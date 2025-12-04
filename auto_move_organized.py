@@ -998,6 +998,8 @@ def overlay_studio_logo_on_poster(poster_base: str, scene: Dict[str, Any], setti
         log.info("[dry_run] Would overlay studio logo on poster, skip actual image processing")
         return
 
+    max_ratio = 0.15
+
     studio = scene.get("studio") or {}
     studio_name = studio.get("name") or ""
     studio_image_url = studio.get("image_path") or ""
@@ -1021,6 +1023,18 @@ def overlay_studio_logo_on_poster(poster_base: str, scene: Dict[str, Any], setti
 
     if not poster_path:
         log.warning(f"Poster file not found for overlay, base='{poster_base}'")
+        return
+
+    try:
+        from PIL import Image  # type: ignore[import]
+    except Exception:
+        log.error("Pillow 未安装，无法在 poster 上叠加厂商 logo")
+        return
+
+    try:
+        poster_img = Image.open(poster_path).convert("RGBA")
+    except Exception as e:
+        log.error(f"打开 poster 图片失败: {e}")
         return
 
     poster_dir = os.path.dirname(poster_path)
@@ -1062,7 +1076,7 @@ def overlay_studio_logo_on_poster(poster_base: str, scene: Dict[str, Any], setti
         log.warning(f"Studio logo file not found for overlay, base='{logo_base}'")
         return
 
-    # 如果是 SVG 格式的 logo，则尝试先转换为 PNG，以便 Pillow 处理
+    # 如果是 SVG 格式的 logo，则尝试先转换为 PNG，尺寸直接按目标高度生成，以减少二次缩放损失
     def _is_svg_file(path: str) -> bool:
         try:
             with open(path, "rb") as f:
@@ -1079,9 +1093,17 @@ def overlay_studio_logo_on_poster(poster_base: str, scene: Dict[str, Any], setti
             log.error("检测到 SVG 格式厂商 logo，但未安装 cairosvg，无法转换为位图，跳过叠加")
             return
 
+        # 直接以目标高度渲染为 PNG，避免再缩放一次
+        target_height_svg = int(poster_img.height * max_ratio)
+        if target_height_svg <= 0:
+            log.error("计算 SVG logo 目标高度无效，跳过叠加")
+            return
+
         png_logo_path = os.path.splitext(logo_path)[0] + ".png"
         try:
-            cairosvg.svg2png(url=logo_path, write_to=png_logo_path)
+            cairosvg.svg2png(
+                url=logo_path, write_to=png_logo_path, output_height=target_height_svg
+            )
             logo_path = png_logo_path
             log.info(f"Converted SVG studio logo to PNG for overlay: {png_logo_path}")
         except Exception as e:
@@ -1089,13 +1111,6 @@ def overlay_studio_logo_on_poster(poster_base: str, scene: Dict[str, Any], setti
             return
 
     try:
-        from PIL import Image  # type: ignore[import]
-    except Exception:
-        log.error("Pillow 未安装，无法在 poster 上叠加厂商 logo")
-        return
-
-    try:
-        poster_img = Image.open(poster_path).convert("RGBA")
         logo_img = Image.open(logo_path).convert("RGBA")
     except Exception as e:
         log.error(f"打开 poster 或 logo 图片失败: {e}")
@@ -1109,8 +1124,11 @@ def overlay_studio_logo_on_poster(poster_base: str, scene: Dict[str, Any], setti
         log.error("Logo 图片尺寸异常，跳过叠加")
         return
 
+    if poster_img.width <= 0 or poster_img.height <= 0:
+        log.error("Poster 图片尺寸异常，跳过叠加")
+        return
+
     # 控制 logo 大小：不超过 poster 高度的一定比例，按高度等比缩放宽度
-    max_ratio = 0.15
     target_height = int(poster_img.height * max_ratio)
     if target_height <= 0:
         log.error("计算得到的 logo 目标高度无效，跳过叠加")
