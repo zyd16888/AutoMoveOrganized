@@ -115,6 +115,7 @@ def load_settings(stash: StashInterface) -> Dict[str, Any]:
     download_poster = bool(_get_val("download_poster", True))
     download_actor_images = bool(_get_val("download_actor_images", True))
     export_actor_nfo = bool(_get_val("export_actor_nfo", True))
+    overlay_studio_logo_on_poster = bool(_get_val("overlay_studio_logo_on_poster", False))
 
     # AI / 翻译 相关配置
     translate_enable = bool(_get_val("translate_enable", False))
@@ -146,7 +147,8 @@ def load_settings(stash: StashInterface) -> Dict[str, Any]:
         f"template='{filename_template}', move_only_organized={move_only_org}, "
         f"dry_run={dry_run}, write_nfo={write_nfo}, "
         f"download_poster={download_poster}, download_actor_images={download_actor_images}, "
-        f"export_actor_nfo={export_actor_nfo}"
+        f"export_actor_nfo={export_actor_nfo}, "
+        f"overlay_studio_logo_on_poster={overlay_studio_logo_on_poster}"
     )
 
     # 也把 AI 配置 log 出来（注意：不要在生产环境 log 明文 API key）
@@ -165,6 +167,7 @@ def load_settings(stash: StashInterface) -> Dict[str, Any]:
         "download_poster": download_poster,
         "download_actor_images": download_actor_images,
         "export_actor_nfo": export_actor_nfo,
+        "overlay_studio_logo_on_poster": overlay_studio_logo_on_poster,
         # AI / 翻译
         "translate_enable": translate_enable,
         "translate_api_base": translate_api_base,
@@ -970,7 +973,142 @@ def download_scene_art(video_path: str, scene: Dict[str, Any], settings: Dict[st
         return
 
     log.info(f"Would download poster: '{abs_url}' -> '{poster_base}.[ext]'")
-    _download_binary(abs_url, poster_base, settings, detect_ext=True)
+    ok = _download_binary(abs_url, poster_base, settings, detect_ext=True)
+
+    if not ok:
+        return
+
+    try:
+        overlay_studio_logo_on_poster(poster_base, scene, settings)
+    except Exception as e:
+        log.error(f"叠加厂商 logo 到 poster 时出错: {e}")
+
+
+def overlay_studio_logo_on_poster(poster_base: str, scene: Dict[str, Any], settings: Dict[str, Any]) -> None:
+    """
+    在已下载好的 poster 右上角叠加厂商 logo。
+    poster_base 为不含扩展名的前缀路径（与 download_scene_art 中一致）。
+    """
+    if not settings.get("overlay_studio_logo_on_poster", False):
+        return
+
+    if settings.get("dry_run"):
+        log.info("[dry_run] Would overlay studio logo on poster, skip actual image processing")
+        return
+
+    studio = scene.get("studio") or {}
+    studio_name = studio.get("name") or ""
+    studio_image_url = studio.get("image_path") or ""
+
+    if not studio_name or not studio_image_url:
+        log.info("Scene has no studio logo image, skip overlay")
+        return
+
+    # 找到实际的 poster 文件（带扩展名）
+    exts = (".jpg", ".jpeg", ".png", ".webp", ".gif")
+    poster_path = None
+    for ext in exts:
+        candidate = poster_base + ext
+        if os.path.exists(candidate):
+            poster_path = candidate
+            break
+
+    if not poster_path:
+        log.warning(f"Poster file not found for overlay, base='{poster_base}'")
+        return
+
+    poster_dir = os.path.dirname(poster_path)
+
+    # 在与 poster 相同目录下缓存厂商 logo，文件名中带上清洗后的厂商名
+    safe_name = safe_segment(studio_name)
+    logo_base = os.path.join(poster_dir, f"{safe_name}-logo")
+
+    logo_path = None
+    for ext in exts:
+        candidate = logo_base + ext
+        if os.path.exists(candidate):
+            logo_path = candidate
+            break
+
+    if not logo_path:
+        abs_logo_url = build_absolute_url(studio_image_url, settings)
+        log.info(f"Downloading studio logo from URL: {abs_logo_url}")
+
+        ok = _download_binary(abs_logo_url, logo_base, settings, detect_ext=True)
+        if not ok:
+            log.error("Failed to download studio logo, skip overlay")
+            return
+
+        for ext in exts:
+            candidate = logo_base + ext
+            if os.path.exists(candidate):
+                logo_path = candidate
+                break
+
+    if not logo_path:
+        log.warning(f"Studio logo file not found for overlay, base='{logo_base}'")
+        return
+
+    try:
+        from PIL import Image  # type: ignore[import]
+    except Exception:
+        log.error("Pillow 未安装，无法在 poster 上叠加厂商 logo")
+        return
+
+    try:
+        poster_img = Image.open(poster_path).convert("RGBA")
+        logo_img = Image.open(logo_path).convert("RGBA")
+    except Exception as e:
+        log.error(f"打开 poster 或 logo 图片失败: {e}")
+        return
+
+    if poster_img.width <= 0 or poster_img.height <= 0:
+        log.error("Poster 图片尺寸异常，跳过叠加")
+        return
+
+    if logo_img.width <= 0 or logo_img.height <= 0:
+        log.error("Logo 图片尺寸异常，跳过叠加")
+        return
+
+    # 控制 logo 大小：不超过 poster 宽度的一定比例，且不放大原图
+    max_ratio = 0.15
+    target_width = int(poster_img.width * max_ratio)
+    if target_width <= 0:
+        log.error("计算得到的 logo 目标宽度无效，跳过叠加")
+        return
+
+    target_width = min(target_width, logo_img.width)
+    if target_width <= 0:
+        log.error("Logo 宽度过小，跳过叠加")
+        return
+
+    target_height = int(target_width * logo_img.height / logo_img.width)
+    if target_height <= 0:
+        log.error("计算得到的 logo 目标高度无效，跳过叠加")
+        return
+
+    logo_img = logo_img.resize((target_width, target_height), Image.LANCZOS)
+
+    padding = int(poster_img.width * 0.02)
+    x = poster_img.width - target_width - padding
+    y = padding
+    if x < 0:
+        x = 0
+    if y < 0:
+        y = 0
+
+    poster_img.paste(logo_img, (x, y), logo_img)
+
+    save_kwargs: Dict[str, Any] = {}
+    if poster_path.lower().endswith((".jpg", ".jpeg")):
+        poster_img = poster_img.convert("RGB")
+        save_kwargs["quality"] = 95
+
+    try:
+        poster_img.save(poster_path, **save_kwargs)
+        log.info(f"Overlayed studio logo on poster: {poster_path}")
+    except Exception as e:
+        log.error(f"保存叠加 logo 后的 poster 失败: {e}")
 
 
 def write_actor_nfo(actor_dir: str, performer: Dict[str, Any], settings: Dict[str, Any]) -> None:
