@@ -1081,21 +1081,16 @@ def overlay_studio_logo_on_poster(poster_base: str, scene: Dict[str, Any], setti
         log.error("Logo 图片尺寸异常，跳过叠加")
         return
 
-    # 控制 logo 大小：不超过 poster 宽度的一定比例，且不放大原图
+    # 控制 logo 大小：不超过 poster 高度的一定比例，按高度等比缩放宽度
     max_ratio = 0.15
-    target_width = int(poster_img.width * max_ratio)
-    if target_width <= 0:
-        log.error("计算得到的 logo 目标宽度无效，跳过叠加")
-        return
-
-    target_width = min(target_width, logo_img.width)
-    if target_width <= 0:
-        log.error("Logo 宽度过小，跳过叠加")
-        return
-
-    target_height = int(target_width * logo_img.height / logo_img.width)
+    target_height = int(poster_img.height * max_ratio)
     if target_height <= 0:
         log.error("计算得到的 logo 目标高度无效，跳过叠加")
+        return
+
+    target_width = int(target_height * logo_img.width / logo_img.height)
+    if target_width <= 0:
+        log.error("计算得到的 logo 目标宽度无效，跳过叠加")
         return
 
     logo_img = logo_img.resize((target_width, target_height), Image.LANCZOS)
