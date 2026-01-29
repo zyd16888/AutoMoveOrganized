@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import time
 import xml.etree.ElementTree as ET
@@ -21,6 +22,8 @@ PLUGIN_ID = "auto-move-organized"
 
 # 常见字幕扩展名
 SUBTITLE_EXTS = {".srt", ".ass", ".ssa", ".vtt", ".sub", ".sup"}
+
+_AUTO_INSTALL_ATTEMPTED: set[str] = set()
 
 
 def task_log(message: str, progress: float | None = None) -> None:
@@ -216,6 +219,40 @@ def build_absolute_url(url: str, settings: Dict[str, Any]) -> str:
         url = "/" + url
 
     return base + url
+
+
+def _ensure_python_package(package: str) -> bool:
+    """
+    尝试在容器内自动安装第三方库。
+    """
+    if package in _AUTO_INSTALL_ATTEMPTED:
+        return False
+    _AUTO_INSTALL_ATTEMPTED.add(package)
+
+    try:
+        log.info(
+            f"{package} 未安装，尝试自动安装: python -m pip install {package} --break-system-packages"
+        )
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", package, "--break-system-packages"],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        log.info(result.stdout or "")
+        return result.returncode == 0
+    except Exception as e:
+        log.error(f"自动安装 {package} 失败: {e}")
+        return False
+
+
+def _ensure_pillow() -> bool:
+    return _ensure_python_package("Pillow")
+
+
+def _ensure_cairosvg() -> bool:
+    return _ensure_python_package("cairosvg")
 
 
 def build_template_vars(
@@ -1083,8 +1120,14 @@ def overlay_studio_logo_on_poster(poster_base: str, scene: Dict[str, Any], setti
     try:
         from PIL import Image  # type: ignore[import]
     except Exception:
-        log.error("Pillow 未安装，无法在 poster 上叠加厂商 logo")
-        return
+        if not _ensure_pillow():
+            log.error("Pillow 未安装且自动安装失败，无法在 poster 上叠加厂商 logo")
+            return
+        try:
+            from PIL import Image  # type: ignore[import]
+        except Exception:
+            log.error("Pillow 自动安装后仍无法导入，无法在 poster 上叠加厂商 logo")
+            return
 
     try:
         poster_img = Image.open(poster_path).convert("RGBA")
@@ -1145,8 +1188,14 @@ def overlay_studio_logo_on_poster(poster_base: str, scene: Dict[str, Any], setti
         try:
             import cairosvg  # type: ignore[import]
         except Exception:
-            log.error("检测到 SVG 格式厂商 logo，但未安装 cairosvg，无法转换为位图，跳过叠加")
-            return
+            if not _ensure_cairosvg():
+                log.error("检测到 SVG 格式厂商 logo，但未安装 cairosvg，无法转换为位图，跳过叠加")
+                return
+            try:
+                import cairosvg  # type: ignore[import]
+            except Exception:
+                log.error("cairosvg 自动安装后仍无法导入，跳过叠加")
+                return
 
         # 直接以目标高度渲染为 PNG，避免再缩放一次
         target_height_svg = int(poster_img.height * max_ratio)
