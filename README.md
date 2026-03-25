@@ -142,3 +142,8 @@
 
 可以根据自己的库结构调整命名模板和 NFO / 翻译相关逻辑，这个仓库主要作为 Stash + Emby/Kodi 媒体库联动的个人工具合集。
 
+自用的命名模板示例：
+
+{studio_name}\{date_year}\{scene_date}.{scene_title}.{performers}\{studio_name}.{scene_date}.{scene_title}.{performers}.{ext}
+
+---
